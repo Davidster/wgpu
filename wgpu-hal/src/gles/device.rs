@@ -820,6 +820,7 @@ impl crate::Device<super::Api> for super::Device {
     unsafe fn create_sampler(
         &self,
         desc: &crate::SamplerDescriptor,
+        _cache_index: usize,
     ) -> Result<super::Sampler, crate::DeviceError> {
         let gl = &self.shared.context.lock();
 

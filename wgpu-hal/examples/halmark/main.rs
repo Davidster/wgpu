@@ -362,7 +362,7 @@ impl<A: hal::Api> Example<A> {
             anisotropy_clamp: None,
             border_color: None,
         };
-        let sampler = unsafe { device.create_sampler(&sampler_desc).unwrap() };
+        let sampler = unsafe { device.create_sampler(&sampler_desc, 0).unwrap() };
 
         let globals = Globals {
             // cgmath::ortho() projection

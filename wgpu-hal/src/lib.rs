@@ -287,7 +287,11 @@ pub trait Device<A: Api>: Send + Sync {
         desc: &TextureViewDescriptor,
     ) -> Result<A::TextureView, DeviceError>;
     unsafe fn destroy_texture_view(&self, view: A::TextureView);
-    unsafe fn create_sampler(&self, desc: &SamplerDescriptor) -> Result<A::Sampler, DeviceError>;
+    unsafe fn create_sampler(
+        &self,
+        desc: &SamplerDescriptor,
+        cache_index: usize,
+    ) -> Result<A::Sampler, DeviceError>;
     unsafe fn destroy_sampler(&self, sampler: A::Sampler);
 
     unsafe fn create_command_encoder(

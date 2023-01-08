@@ -2,6 +2,13 @@ use crate::auxil::{self, dxgi::result::HResult as _};
 
 use super::{conv, descriptor, view};
 use parking_lot::Mutex;
+use std::{
+    collections::{hash_map::Entry, HashMap},
+    ffi, mem,
+    num::NonZeroU32,
+    ptr, slice,
+    sync::Arc,
+};
 use std::{ffi, mem, num::NonZeroU32, ptr, sync::Arc};
 use winapi::{
     shared::{dxgiformat, dxgitype, minwindef::BOOL, winerror},
@@ -89,7 +96,7 @@ impl super::Device {
 
         // maximum number of CBV/SRV/UAV descriptors in heap for Tier 1
         let capacity_views = 1_000_000;
-        let capacity_samplers = 2_048;
+        let capacity_samplers = 2048;
 
         let shared = super::DeviceShared {
             zero_buffer,
@@ -173,6 +180,7 @@ impl super::Device {
             null_rtv_handle,
             mem_allocator,
             dxc_container,
+            uploaded_sampler_handles: Mutex::new(HashMap::new()),
         })
     }
 
@@ -584,6 +592,7 @@ impl crate::Device<super::Api> for super::Device {
     unsafe fn create_sampler(
         &self,
         desc: &crate::SamplerDescriptor,
+        cache_index: usize,
     ) -> Result<super::Sampler, crate::DeviceError> {
         let handle = self.sampler_pool.lock().alloc_handle();
 
@@ -616,7 +625,10 @@ impl crate::Device<super::Api> for super::Device {
             desc.lod_clamp.clone().unwrap_or(0.0..16.0),
         );
 
-        Ok(super::Sampler { handle })
+        Ok(super::Sampler {
+            handle,
+            cache_index,
+        })
     }
     unsafe fn destroy_sampler(&self, sampler: super::Sampler) {
         self.sampler_pool.lock().free_handle(sampler.handle);
@@ -1099,6 +1111,7 @@ impl crate::Device<super::Api> for super::Device {
         if let Some(ref mut inner) = cpu_samplers {
             inner.stage.clear();
         }
+        let mut sampler_cache_indices = Vec::new();
         let mut dynamic_buffers = Vec::new();
 
         for (layout, entry) in desc.layout.entries.iter().zip(desc.entries.iter()) {
@@ -1205,6 +1218,7 @@ impl crate::Device<super::Api> for super::Device {
                     let end = start + entry.count as usize;
                     for data in &desc.samplers[start..end] {
                         cpu_samplers.as_mut().unwrap().stage.push(data.handle.raw);
+                        sampler_cache_indices.push(data.cache_index);
                     }
                 }
             }
@@ -1226,15 +1240,25 @@ impl crate::Device<super::Api> for super::Device {
         };
         let handle_samplers = match cpu_samplers {
             Some(inner) => {
-                let dual = unsafe {
-                    descriptor::upload(
-                        self.raw,
-                        &inner,
-                        &self.shared.heap_samplers,
-                        &desc.layout.copy_counts,
-                    )
-                }?;
-                Some(dual)
+                match self
+                    .uploaded_sampler_handles
+                    .lock()
+                    .entry(sampler_cache_indices)
+                {
+                    Entry::Occupied(dual) => Some(*dual.get()),
+                    Entry::Vacant(entry) => {
+                        let dual = unsafe {
+                            descriptor::upload(
+                                self.raw,
+                                &inner,
+                                &self.shared.heap_samplers,
+                                &desc.layout.copy_counts,
+                            )
+                        }?;
+                        entry.insert(dual);
+                        Some(dual)
+                    }
+                }
             }
             None => None,
         };
@@ -1249,9 +1273,10 @@ impl crate::Device<super::Api> for super::Device {
         if let Some(dual) = group.handle_views {
             self.shared.heap_views.free_slice(dual);
         }
-        if let Some(dual) = group.handle_samplers {
+        // TODO: why does this die?
+        /* if let Some(dual) = group.handle_samplers {
             self.shared.heap_samplers.free_slice(dual);
-        }
+        } */
     }
 
     unsafe fn create_shader_module(
