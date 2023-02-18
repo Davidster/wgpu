@@ -9,7 +9,6 @@ use std::{
     ptr, slice,
     sync::Arc,
 };
-use std::{ffi, mem, num::NonZeroU32, ptr, sync::Arc};
 use winapi::{
     shared::{dxgiformat, dxgitype, minwindef::BOOL, winerror},
     um::{d3d12, synchapi, winbase},
