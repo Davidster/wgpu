@@ -299,8 +299,6 @@ pub struct Device<A: HalApi> {
     pending_writes: queue::PendingWrites<A>,
     #[cfg(feature = "trace")]
     pub(crate) trace: Option<Mutex<trace::Trace>>,
-
-    sampler_cache: Mutex<Vec<resource::SamplerDescriptor<'static>>>,
 }
 
 #[derive(Clone, Debug, Error)]
@@ -420,7 +418,6 @@ impl<A: HalApi> Device<A> {
             features: desc.features,
             downlevel,
             pending_writes,
-            sampler_cache: Mutex::new(Vec::new()),
         })
     }
 
@@ -1239,23 +1236,6 @@ impl<A: HalApi> Device<A> {
         self_id: id::DeviceId,
         desc: &resource::SamplerDescriptor,
     ) -> Result<resource::Sampler<A>, resource::CreateSamplerError> {
-        let mut sampler_cache = self.sampler_cache.lock();
-        let cached_sampler_index = sampler_cache
-            .iter()
-            .enumerate()
-            .find_map(|(i, descriptor)| descriptor.eq(&(desc.clone())).then_some(i));
-        let sampler_cache_index = cached_sampler_index.unwrap_or(sampler_cache.len());
-        if cached_sampler_index.is_none() {
-            sampler_cache.push(resource::SamplerDescriptor {
-                label: desc
-                    .clone()
-                    .label
-                    .map(String::from)
-                    .map(|label| label.into()),
-                ..desc.clone()
-            });
-        }
-
         if desc
             .address_modes
             .iter()
@@ -1316,7 +1296,7 @@ impl<A: HalApi> Device<A> {
 
         let raw = unsafe {
             self.raw
-                .create_sampler(&hal_desc, sampler_cache_index)
+                .create_sampler(&hal_desc)
                 .map_err(DeviceError::from)?
         };
         Ok(resource::Sampler {

@@ -262,7 +262,7 @@ pub struct Device {
     null_rtv_handle: descriptor::Handle,
     mem_allocator: Option<Mutex<suballocation::GpuAllocatorWrapper>>,
     dxc_container: Option<shader_compilation::DxcContainer>,
-    uploaded_sampler_handles: Mutex<HashMap<Vec<usize>, descriptor::DualHandle>>,
+    uploaded_sampler_handles: Mutex<HashMap<Vec<u64>, descriptor::DualHandle>>,
 }
 
 unsafe impl Send for Device {}
@@ -473,7 +473,7 @@ unsafe impl Sync for TextureView {}
 #[derive(Debug)]
 pub struct Sampler {
     handle: descriptor::Handle,
-    cache_index: usize,
+    hash: u64,
 }
 
 unsafe impl Send for Sampler {}

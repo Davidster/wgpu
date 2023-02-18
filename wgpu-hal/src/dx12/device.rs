@@ -4,9 +4,11 @@ use super::{conv, descriptor, view};
 use parking_lot::Mutex;
 use std::{
     collections::{hash_map::Entry, HashMap},
-    ffi, mem,
+    ffi,
+    hash::{Hash, Hasher},
+    mem,
     num::NonZeroU32,
-    ptr, slice,
+    ptr,
     sync::Arc,
 };
 use winapi::{
@@ -591,7 +593,6 @@ impl crate::Device<super::Api> for super::Device {
     unsafe fn create_sampler(
         &self,
         desc: &crate::SamplerDescriptor,
-        cache_index: usize,
     ) -> Result<super::Sampler, crate::DeviceError> {
         let handle = self.sampler_pool.lock().alloc_handle();
 
@@ -624,10 +625,14 @@ impl crate::Device<super::Api> for super::Device {
             desc.lod_clamp.clone().unwrap_or(0.0..16.0),
         );
 
-        Ok(super::Sampler {
-            handle,
-            cache_index,
-        })
+        let hash = {
+            // use std::hash::Hasher;
+            let mut state = std::collections::hash_map::DefaultHasher::new();
+            desc.hash(&mut state);
+            state.finish()
+        };
+
+        Ok(super::Sampler { handle, hash })
     }
     unsafe fn destroy_sampler(&self, sampler: super::Sampler) {
         self.sampler_pool.lock().free_handle(sampler.handle);
@@ -1110,7 +1115,7 @@ impl crate::Device<super::Api> for super::Device {
         if let Some(ref mut inner) = cpu_samplers {
             inner.stage.clear();
         }
-        let mut sampler_cache_indices = Vec::new();
+        let mut sampler_hashes = Vec::new();
         let mut dynamic_buffers = Vec::new();
 
         for (layout, entry) in desc.layout.entries.iter().zip(desc.entries.iter()) {
@@ -1217,7 +1222,7 @@ impl crate::Device<super::Api> for super::Device {
                     let end = start + entry.count as usize;
                     for data in &desc.samplers[start..end] {
                         cpu_samplers.as_mut().unwrap().stage.push(data.handle.raw);
-                        sampler_cache_indices.push(data.cache_index);
+                        sampler_hashes.push(data.hash);
                     }
                 }
             }
@@ -1238,27 +1243,21 @@ impl crate::Device<super::Api> for super::Device {
             None => None,
         };
         let handle_samplers = match cpu_samplers {
-            Some(inner) => {
-                match self
-                    .uploaded_sampler_handles
-                    .lock()
-                    .entry(sampler_cache_indices)
-                {
-                    Entry::Occupied(dual) => Some(*dual.get()),
-                    Entry::Vacant(entry) => {
-                        let dual = unsafe {
-                            descriptor::upload(
-                                self.raw,
-                                &inner,
-                                &self.shared.heap_samplers,
-                                &desc.layout.copy_counts,
-                            )
-                        }?;
-                        entry.insert(dual);
-                        Some(dual)
-                    }
+            Some(inner) => match self.uploaded_sampler_handles.lock().entry(sampler_hashes) {
+                Entry::Occupied(dual) => Some(*dual.get()),
+                Entry::Vacant(entry) => {
+                    let dual = unsafe {
+                        descriptor::upload(
+                            self.raw,
+                            &inner,
+                            &self.shared.heap_samplers,
+                            &desc.layout.copy_counts,
+                        )
+                    }?;
+                    entry.insert(dual);
+                    Some(dual)
                 }
-            }
+            },
             None => None,
         };
 

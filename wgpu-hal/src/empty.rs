@@ -151,11 +151,7 @@ impl crate::Device<Api> for Context {
         Ok(Resource)
     }
     unsafe fn destroy_texture_view(&self, view: Resource) {}
-    unsafe fn create_sampler(
-        &self,
-        desc: &crate::SamplerDescriptor,
-        cache_index: usize,
-    ) -> DeviceResult<Resource> {
+    unsafe fn create_sampler(&self, desc: &crate::SamplerDescriptor) -> DeviceResult<Resource> {
         Ok(Resource)
     }
     unsafe fn destroy_sampler(&self, sampler: Resource) {}
