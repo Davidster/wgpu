@@ -2,8 +2,11 @@
 mod framework;
 
 use bytemuck::{Pod, Zeroable};
+use glam::Mat4;
 use std::{borrow::Cow, f32::consts, mem};
 use wgpu::util::DeviceExt;
+
+type MatrixPushConstant = [f32; 16];
 
 const TEXTURE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 const MIP_LEVEL_COUNT: u32 = 10;
@@ -56,8 +59,8 @@ fn pipeline_statistics_offset() -> wgpu::BufferAddress {
 
 struct Example {
     bind_group: wgpu::BindGroup,
-    uniform_buf: wgpu::Buffer,
     draw_pipeline: wgpu::RenderPipeline,
+    mx: Mat4,
 }
 
 impl Example {
@@ -80,7 +83,7 @@ impl Example {
     ) {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: None,
-            source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(include_str!("blit.wgsl"))),
+            source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(include_str!("draw.wgsl"))),
         });
 
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -88,12 +91,12 @@ impl Example {
             layout: None,
             vertex: wgpu::VertexState {
                 module: &shader,
-                entry_point: "vs_main",
+                entry_point: "blit_vs_main",
                 buffers: &[],
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
-                entry_point: "fs_main",
+                entry_point: "blit_fs_main",
                 targets: &[Some(TEXTURE_FORMAT.into())],
             }),
             primitive: wgpu::PrimitiveState {
@@ -203,6 +206,14 @@ impl framework::Example for Example {
         wgpu::Features::TIMESTAMP_QUERY
             | wgpu::Features::PIPELINE_STATISTICS_QUERY
             | wgpu::Features::TIMESTAMP_QUERY_INSIDE_PASSES
+            | wgpu::Features::PUSH_CONSTANTS
+    }
+
+    fn required_limits() -> wgpu::Limits {
+        wgpu::Limits {
+            max_push_constant_size: std::mem::size_of::<MatrixPushConstant>() as u32,
+            ..wgpu::Limits::downlevel_webgl2_defaults() // These downlevel limits will allow the code to run on all possible hardware
+        }
     }
 
     fn init(
@@ -267,12 +278,6 @@ impl framework::Example for Example {
             ..Default::default()
         });
         let mx_total = Self::generate_matrix(config.width as f32 / config.height as f32);
-        let mx_ref: &[f32; 16] = mx_total.as_ref();
-        let uniform_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Uniform Buffer"),
-            contents: bytemuck::cast_slice(mx_ref),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        });
 
         // Create the render pipeline
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -280,9 +285,40 @@ impl framework::Example for Example {
             source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(include_str!("draw.wgsl"))),
         });
 
+        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        multisampled: false,
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+            label: None,
+        });
+
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("main"),
+            bind_group_layouts: &[&bind_group_layout],
+            push_constant_ranges: &[wgpu::PushConstantRange {
+                stages: wgpu::ShaderStages::FRAGMENT,
+                range: 0..std::mem::size_of::<MatrixPushConstant>() as u32,
+            }],
+        });
+
         let draw_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("draw"),
-            layout: None,
+            layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &shader,
                 entry_point: "vs_main",
@@ -305,20 +341,15 @@ impl framework::Example for Example {
         });
 
         // Create bind group
-        let bind_group_layout = draw_pipeline.get_bind_group_layout(0);
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             layout: &bind_group_layout,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: uniform_buf.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
                     resource: wgpu::BindingResource::TextureView(&texture_view),
                 },
                 wgpu::BindGroupEntry {
-                    binding: 2,
+                    binding: 1,
                     resource: wgpu::BindingResource::Sampler(&sampler),
                 },
             ],
@@ -427,8 +458,8 @@ impl framework::Example for Example {
 
         Example {
             bind_group,
-            uniform_buf,
             draw_pipeline,
+            mx: mx_total,
         }
     }
 
@@ -440,11 +471,10 @@ impl framework::Example for Example {
         &mut self,
         config: &wgpu::SurfaceConfiguration,
         _device: &wgpu::Device,
-        queue: &wgpu::Queue,
+        _queue: &wgpu::Queue,
     ) {
         let mx_total = Self::generate_matrix(config.width as f32 / config.height as f32);
-        let mx_ref: &[f32; 16] = mx_total.as_ref();
-        queue.write_buffer(&self.uniform_buf, 0, bytemuck::cast_slice(mx_ref));
+        self.mx = mx_total;
     }
 
     fn render(
@@ -476,6 +506,11 @@ impl framework::Example for Example {
                 depth_stencil_attachment: None,
             });
             rpass.set_pipeline(&self.draw_pipeline);
+            rpass.set_push_constants(
+                wgpu::ShaderStages::FRAGMENT,
+                0,
+                bytemuck::cast_slice(self.mx.as_ref()),
+            );
             rpass.set_bind_group(0, &self.bind_group, &[]);
             rpass.draw(0..4, 0..1);
         }
